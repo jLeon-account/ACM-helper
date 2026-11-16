@@ -1,0 +1,28 @@
+{
+  "bindings": [
+    {
+      "kind": "edges",
+      "source": "",
+      "from": "from",
+      "to": "to",
+      "weight": "",
+      "count": "n",
+      "edgeCount": "m",
+      "base": 0,
+      "directed": true,
+      "absent": "0",
+      "root": "",
+      "labels": "",
+      "status": "visited",
+      "distance": "indegree",
+      "current": "u",
+      "target": "v",
+      "lineStart": 15,
+      "lineEnd": 24,
+      "infinity": "",
+      "positions": {},
+      "id": "topology-graph",
+      "name": "有向图 · 入度"
+    }
+  ]
+}

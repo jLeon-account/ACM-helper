@@ -1,0 +1,28 @@
+{
+  "bindings": [
+    {
+      "kind": "matrix",
+      "source": "G",
+      "from": "",
+      "to": "",
+      "weight": "value",
+      "count": "n",
+      "edgeCount": "",
+      "base": 0,
+      "directed": true,
+      "absent": "INF",
+      "root": "0",
+      "labels": "",
+      "status": "",
+      "distance": "dist[0]",
+      "current": "u",
+      "target": "v",
+      "lineStart": 21,
+      "lineEnd": 31,
+      "infinity": "INF",
+      "positions": {},
+      "id": "floyd-graph",
+      "name": "有向图 · 源点 0 的距离"
+    }
+  ]
+}

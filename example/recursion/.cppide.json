@@ -1,0 +1,18 @@
+{
+  "name": "recursion",
+  "config": {
+    "entry": "recursion.cpp",
+    "stdin": "5\n",
+    "inputMode": "terminal",
+    "breakpoints": {},
+    "bindings": [],
+    "observe": {
+      "pins": [],
+      "pages": {},
+      "ranges": {},
+      "expanded": [],
+      "inferInitialization": true,
+      "fold": true
+    }
+  }
+}

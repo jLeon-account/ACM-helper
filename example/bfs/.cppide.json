@@ -1,0 +1,43 @@
+{
+  "name": "bfs",
+  "config": {
+    "entry": "bfs.cpp",
+    "stdin": "",
+    "inputMode": "terminal",
+    "breakpoints": {},
+    "bindings": [
+      {
+        "id": "bfs-graph",
+        "name": "广度优先遍历",
+        "kind": "matrix",
+        "source": "G",
+        "from": "",
+        "to": "",
+        "weight": "none",
+        "count": "n",
+        "edgeCount": "",
+        "base": 0,
+        "directed": false,
+        "absent": "0",
+        "root": "0",
+        "labels": "",
+        "status": "visited",
+        "distance": "dist",
+        "current": "u",
+        "target": "v",
+        "lineStart": 24,
+        "lineEnd": 30,
+        "infinity": "",
+        "positions": {}
+      }
+    ],
+    "observe": {
+      "pins": [],
+      "pages": {},
+      "ranges": {},
+      "expanded": [],
+      "inferInitialization": true,
+      "fold": true
+    }
+  }
+}

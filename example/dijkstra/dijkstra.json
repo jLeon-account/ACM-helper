@@ -1,0 +1,1 @@
+{"bindings":[{"id":"dijkstra-graph","name":"最短路径 · 有向带权图","kind":"matrix","source":"G","from":"","to":"","weight":"value","count":"n","edgeCount":"","base":0,"directed":true,"absent":"INF","root":"0","labels":"","status":"visited","distance":"dist","current":"u","target":"v","lineStart":31,"lineEnd":39,"infinity":"INF","positions":{}}]}

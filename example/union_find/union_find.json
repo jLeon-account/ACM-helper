@@ -1,0 +1,28 @@
+{
+  "bindings": [
+    {
+      "kind": "parent",
+      "source": "parent",
+      "from": "",
+      "to": "",
+      "weight": "none",
+      "count": "n",
+      "edgeCount": "",
+      "base": 0,
+      "directed": true,
+      "absent": "-1",
+      "root": "",
+      "labels": "",
+      "status": "",
+      "distance": "",
+      "current": "current",
+      "target": "",
+      "lineStart": 10,
+      "lineEnd": 21,
+      "infinity": "",
+      "positions": {},
+      "id": "dsu-forest",
+      "name": "并查集父节点"
+    }
+  ]
+}
