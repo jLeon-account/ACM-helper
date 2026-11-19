@@ -19,7 +19,7 @@ export class Debugger extends EventEmitter {
   private stopGeneration=0;private breakpointIds:string[]=[];private runMode=false;
   private stopping=false;
   terminal?:NativeTerminal;private finalBreakpoint='';
-  private stopQueue=Promise.resolve();
+  private stopQueue=Promise.resolve();private libraryHops=0;private lastStopLine=0;private silentSteps=0;
   private decoders={stdout:new StringDecoder('utf8'),stderr:new StringDecoder('utf8')};
   send(event:ServerEvent){this.emit('event',event);}
   state(status:DebugStatus,message?:string){this.status=status;this.send({type:'status',status,message,session:this.session});}
@@ -46,15 +46,22 @@ export class Debugger extends EventEmitter {
       if(reason.startsWith('exited')){void this.readOutput().then(async()=>{if(this.outputTimer){clearInterval(this.outputTimer);this.outputTimer=undefined;}await this.terminal?.stop();this.state('exited',`程序结束 ${record.data['exit-code']??''}`);});}
       else {
         const final=record.data.bkptno===this.finalBreakpoint;const generation=this.stopGeneration;
-        this.stopQueue=this.stopQueue.then(async()=>{if(generation!==this.stopGeneration||this.stopping)return;this.selectedFrame=final?2:0;await this.capture(final?'final':reason);if(final&&!this.stopping){this.state('running');await this.command('-exec-continue');}}).catch(e=>this.fail(e));
+        this.stopQueue=this.stopQueue.then(async()=>{if(generation!==this.stopGeneration||this.stopping)return;
+          // 高速自动播放：一次请求连续执行多步，只在最后一步采集变量（中间步骤的变化会合并显示）。
+          if(!final&&this.silentSteps>0&&reason==='end-stepping-range'){this.silentSteps--;await this.command('-exec-next');return;}
+          this.silentSteps=0;this.selectedFrame=final?2:0;await this.capture(final?'final':reason);if(final&&!this.stopping){this.state('running');await this.command('-exec-continue');}}).catch(e=>this.fail(e));
       }
     }
   }
   async compile(projectPath:string, config:ProjectConfig){
-    await this.stop();this.session=crypto.randomUUID();this.step=0;this.snapshot=undefined;this.config=structuredClone(config);this.state('compiling');
+    await this.stop();this.session=crypto.randomUUID();this.step=0;this.snapshot=undefined;this.libraryHops=0;this.lastStopLine=0;this.silentSteps=0;this.config=structuredClone(config);this.state('compiling');
     const generation=this.stopGeneration;
+    // 清理上一次运行留下的临时目录（失败时忽略，例如文件仍被占用）。
+    if(this.root){const previous=this.root;void fs.rm(previous,{recursive:true,force:true}).catch(()=>{});}
     this.root=await fs.mkdtemp(path.join(os.tmpdir(),'cppide-cpp-'));
-    await fs.cp(projectPath,this.root,{recursive:true,filter:p=>!path.basename(p).startsWith('.')});
+    // 只复制源码相关内容：跳过隐藏文件和常见的构建输出 / 依赖文件夹，避免打开大文件夹时每次运行都复制全部内容。
+    const skipped=new Set(['node_modules','build','dist','out','bin','obj']);
+    await fs.cp(projectPath,this.root,{recursive:true,filter:p=>{const name=path.basename(p);if(p===projectPath)return true;return !name.startsWith('.')&&!skipped.has(name.toLowerCase())&&!/^cmake-build-/i.test(name);}});
     await fs.copyFile(path.resolve('server/collector.py'),path.join(this.root,'collector.py'));
     await fs.writeFile(path.join(this.root,'input.txt'),config.stdin||'');
     await Promise.all(['stdout','stderr'].map(name=>fs.writeFile(path.join(this.root,`${name}.txt`),'')));
@@ -91,9 +98,14 @@ export class Debugger extends EventEmitter {
     await this.command(`-file-exec-and-symbols ${miQuote(executable.replaceAll('\\','/'))}`);
     await this.command(`-interpreter-exec console ${miQuote('source '+path.join(this.root,'collector.py').replaceAll('\\','/'))}`);
     for(const name of ['__cyg_profile_func_enter','__cyg_profile_func_exit'])await this.command('-interpreter-exec console '+miQuote('skip function '+name));
+    // 与 CLion 默认行为一致：进入函数（F7）不进入标准库 / 系统头文件，只停在用户自己的代码里。
+    for(const rule of ['skip -rfunction ^(std|__gnu_cxx|__gnu_debug|__cxxabiv1|__pstl)::','skip -gfile */include/c++/*','skip -gfile /usr/include/*','skip -gfile */lib/gcc/*'])
+      await this.command('-interpreter-exec console '+miQuote(rule)).catch(()=>{});
     this.breakpointIds=[];
     this.finalBreakpoint='';
-    if(debug){await this.command('-break-insert -t main');await this.setBreakpoints(config.breakpoints);const final=await this.command('-break-insert cppide_final_checkpoint');this.finalBreakpoint=final.bkpt.number;}
+    // 设了断点就直接运行到断点（与 CLion 一致）；一个断点都没有时停在 main 的第一句，方便从头单步。
+    const hasBreakpoints=Object.values(config.breakpoints??{}).some(lines=>Array.isArray(lines)&&lines.some(line=>Number.isInteger(line)&&line>0));
+    if(debug){if(!hasBreakpoints)await this.command('-break-insert -t main');await this.setBreakpoints(config.breakpoints);const final=await this.command('-break-insert cppide_final_checkpoint');this.finalBreakpoint=final.bkpt.number;}
     // Inferior I/O goes to separate files, never into the MI protocol stream.
     if(!consolePid)await this.command(`-exec-arguments < input.txt > stdout.txt 2> stderr.txt`);
     this.outputTimer=setInterval(()=>void this.readOutput(),120);this.state('running');
@@ -109,26 +121,44 @@ export class Debugger extends EventEmitter {
     }
     if(this.config)this.config.breakpoints=points;
   }
+  private async collect(reason:string,reset:boolean,probe:boolean){
+    if(!this.config)throw new Error('缺少项目配置');
+    const options={...this.config.observe,frame:this.selectedFrame,root:this.root,reset,probe,final:reason==='final',bindings:this.config.bindings,executedLine:this.lastStopLine,watches:[...new Set(this.config.bindings.flatMap(b=>[b.count,b.edgeCount,b.current,b.target,b.root]).filter(Boolean))]};
+    this.captureBuffer='';
+    await this.command('-interpreter-exec console '+miQuote('cppide-snapshot '+Buffer.from(JSON.stringify(options)).toString('base64')));
+    if(!this.captureBuffer)throw new Error('未收到变量快照');
+    const parsed=JSON.parse(Buffer.from(this.captureBuffer,'base64').toString('utf8'));
+    if(parsed.error)throw new Error(parsed.error);
+    return parsed;
+  }
   async capture(reason='refresh',reset=false){
     if(this.capturing)return;this.capturing=true;
     try{
-      if(!this.config)throw new Error('缺少项目配置');
-      const options={...this.config.observe,frame:this.selectedFrame,root:this.root,reset,final:reason==='final',bindings:this.config.bindings,executedLine:this.snapshot?.location.line??0,watches:[...new Set(this.config.bindings.flatMap(b=>[b.count,b.edgeCount,b.current,b.target,b.root]).filter(Boolean))]};
-      this.captureBuffer='';
-      await this.command('-interpreter-exec console '+miQuote('cppide-snapshot '+Buffer.from(JSON.stringify(options)).toString('base64')));
-      if(!this.captureBuffer)throw new Error('未收到变量快照');
-      const parsed=JSON.parse(Buffer.from(this.captureBuffer,'base64').toString('utf8'));
-      if(parsed.error)throw new Error(parsed.error);
-      if(this.step===0&&reason==='breakpoint-hit'&&parsed.location.function==='main'){
-        const source=await fs.readFile(path.resolve(this.root,parsed.location.file),'utf8');const line=source.split('\n')[parsed.location.line-1]??'';
+      // 先只读取位置（不更新变化记录），决定是否需要自动跳过库代码。
+      const probe=await this.collect(reason,reset,true);
+      if(this.step===0&&reason==='breakpoint-hit'&&probe.location.function==='main'){
+        const source=await fs.readFile(path.resolve(this.root,probe.location.file),'utf8');const line=source.split('\n')[probe.location.line-1]??'';
         if(line.includes('{')&&!line.slice(line.indexOf('{')+1).replace(/\/\/.*$/,'').trim()) {await this.command('-exec-next');return;}
       }
-      if(reason==='end-stepping-range'&&!parsed.location.file){
+      if(reason==='end-stepping-range'&&!probe.location.file){
         // Stepping off main enters CRT code with no source. Continue to real exit.
         await this.command('-exec-continue');return;
       }
+      if(['end-stepping-range','function-finished'].includes(reason)&&probe.location.file&&probe.location.user===false&&this.libraryHops<32){
+        // 单步落在标准库等非项目代码中（例如从被 std::sort 调用的比较函数返回）：自动跳出，直到回到用户代码。
+        this.libraryHops++;
+        try{await this.command('-exec-finish');return;}catch{/* 已是最外层栈帧，按原样显示 */}
+      }
+      this.libraryHops=0;
+      if(reason==='signal-received'&&probe.location.user===false&&this.selectedFrame===0){
+        // 崩溃发生在库代码里时，默认显示最近的一层用户代码。
+        const frame=(probe.frames as {level:number;user?:boolean}[]).find(f=>f.user);if(frame&&frame.level>0)this.selectedFrame=frame.level;
+      }
+      const parsed=await this.collect(reason,reset,false);
       if(reason==='final')for(const data of Object.values(parsed.bindingData??{}) as any[]){data.current='';data.target='';}
       this.snapshot={...parsed,session:this.session,step:++this.step,reason,timestamp:Date.now()};
+      // “刚执行过的行”只随真正的暂停更新；切换调用栈 / 刷新不改变它。
+      if(!['refresh','reset','frame'].includes(reason))this.lastStopLine=parsed.location.line;
       await this.readOutput();this.send({type:'snapshot',snapshot:this.snapshot!});if(reason!=='final')this.state('paused',reason);
     }finally{this.capturing=false;}
   }
@@ -143,8 +173,10 @@ export class Debugger extends EventEmitter {
     const commands:Record<string,string>={next:'-exec-next',step:'-exec-step',finish:'-exec-finish',continue:'-exec-continue'};
     if(!commands[action])throw new Error('未知调试操作');
     // Execution controls always operate on the newest frame, independent of inspection.
-    await this.command('-stack-select-frame 0');this.selectedFrame=0;this.state('running');
-    try{await this.command(commands[action]);}catch(e){this.state('paused');throw e;}
+    if(this.selectedFrame!==0)await this.command('-stack-select-frame 0');this.selectedFrame=0;
+    this.silentSteps=action==='next'?Math.max(0,Math.min(49,Math.floor(Number(options.count)||1)-1)):0;
+    this.state('running');
+    try{await this.command(commands[action]);}catch(e){this.silentSteps=0;this.state('paused');throw e;}
   }
   input(text:string){if(!['paused','running'].includes(this.status)||!this.terminal)throw new Error('当前没有可输入的运行终端');this.terminal.input(text);}
   resizeTerminal(cols:number,rows:number){this.terminal?.resize(cols,rows);}

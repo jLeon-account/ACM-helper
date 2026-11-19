@@ -1,22 +1,18 @@
-.app-header{height:34px;padding:0 13px}
-.header-center{margin:0 auto 0 0;display:flex!important}
-.header-actions{gap:5px}.header-actions button{font-size:10px}
-.sidebar-bottom{padding:8px 10px}.sidebar-bottom .sample-link{padding:6px 3px;font-size:11px}
-.speed-control{display:flex;align-items:center;gap:5px;color:#91a8ad;font-size:10px}
-.speed-input{position:relative;width:60px}
-.speed-control input{width:60px;height:28px;padding:4px 18px 4px 5px;font-size:11px;appearance:textfield;-moz-appearance:textfield;color-scheme:dark}
-.speed-control input::-webkit-inner-spin-button,.speed-control input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
-.speed-arrows{position:absolute;right:1px;top:1px;bottom:1px;display:flex;flex-direction:column;border-left:1px solid #30424b}
-.toolbar .speed-arrows button{width:16px;height:13px;min-height:0;padding:0;border:0;border-radius:0;color:#91a8ad;background:#17262e}
-.toolbar .speed-arrows button:first-child{border-radius:0 3px 0 0}
-.toolbar .speed-arrows button:last-child{border-radius:0 0 3px 0}
-.toolbar .speed-arrows button:hover:not(:disabled){color:#b6efbc;background:#294438}
-.toolbar .speed-arrows button:focus-visible{position:relative;z-index:1;outline-offset:-2px}
-.terminal-container{flex:1;min-height:0;flex-direction:column;overflow:hidden}
-.terminal-host{flex:1;min-height:0;overflow:hidden;padding:5px 7px}
-.terminal-host .xterm{height:100%}
-.terminal-status{font-size:9px;color:#7d969d;padding:5px 8px;border-top:1px solid #25353d}
-.recent-projects{display:flex;flex-direction:column;gap:4px;max-height:260px;overflow:auto}
-.recent-projects button{justify-content:flex-start;padding:9px}
-.recent-projects span{display:flex;flex-direction:column;gap:4px;text-align:left;overflow:hidden}
-.recent-projects small{overflow:hidden;text-overflow:ellipsis}
+/* 终端与播放速度控件 */
+.speed-control { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; margin-left: 4px; white-space: nowrap; }
+.speed-input { position: relative; width: 64px; }
+.speed-control input { width: 64px; height: 28px; padding: 4px 20px 4px 7px; font-size: 12px; font-family: var(--font-mono); appearance: textfield; -moz-appearance: textfield; }
+.speed-control input::-webkit-inner-spin-button, .speed-control input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.speed-arrows { position: absolute; right: 1px; top: 1px; bottom: 1px; display: flex; flex-direction: column; border-left: 1px solid var(--border-strong); }
+.speed-arrows button { width: 17px; height: 13px; min-height: 0; padding: 0; border: 0; border-radius: 0; color: var(--muted); background: var(--bg-input); }
+.header-tools .speed-arrows button { height: 13px; }
+.speed-arrows button:first-child { border-radius: 0 4px 0 0; }
+.speed-arrows button:last-child { border-radius: 0 0 4px 0; }
+.speed-arrows button:hover:not(:disabled) { color: var(--accent-text); background: var(--hover); }
+.speed-arrows button:focus-visible { position: relative; z-index: 1; outline-offset: -2px; }
+.terminal-container { flex: 1; min-height: 0; flex-direction: column; overflow: hidden; background: var(--bg-editor); }
+.terminal-host { flex: 1; min-height: 0; overflow: hidden; padding: 6px 8px; }
+.terminal-host .xterm { height: 100%; }
+.terminal-host .xterm-viewport { background-color: transparent !important; }
+.terminal-status { font-size: 11px; color: var(--muted); padding: 5px 10px; border-top: 1px solid var(--border-subtle); background: var(--bg-panel); }
+.speed-actual { font-size: 11px; color: var(--green); background: var(--green-bg); border-radius: 8px; padding: 1px 6px; font-family: var(--font-mono); }

@@ -1,22 +1,23 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
+rem Keep this file ASCII-only: cmd.exe mis-parses multi-byte UTF-8 lines in batch files.
+rem Chinese messages are printed by scripts/ensure-build.mjs and the server instead.
 where node >nul 2>nul
 if errorlevel 1 (
-  echo 请先安装 Node.js 22 或更新版本。
+  echo [ACM Helper] Node.js 22 or newer is required: https://nodejs.org/
   pause
   exit /b 1
 )
 if not exist node_modules (
   call npm install
-  if errorlevel 1 exit /b 1
+  if errorlevel 1 goto failed
 )
-if not exist dist\index.html (
-  call npm run build
-  if errorlevel 1 exit /b 1
-)
-echo C++ 调试工作区
-echo 浏览器访问 http://127.0.0.1:4173
-echo 关闭此窗口或按 Ctrl+C 停止服务。
+node scripts/ensure-build.mjs
+if errorlevel 1 goto failed
 call npm start
 pause
+exit /b 0
+:failed
+pause
+exit /b 1

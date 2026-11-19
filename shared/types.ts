@@ -8,10 +8,10 @@ export type Variable = {
   warning?: string; initialization?: string;
 };
 export type FoldRun = { start: number; end: number; value: string; reason: string };
-export type Frame = { level: number; name: string; file: string; line: number; id: string };
+export type Frame = { level: number; name: string; file: string; line: number; id: string; user?: boolean };
 export type Snapshot = {
   session: string; step: number; reason: string; frames: Frame[]; frame: number;
-  location: {file: string; line: number; function: string}; variables: Variable[];
+  location: {file: string; line: number; function: string; user?: boolean; projectFile?: string}; variables: Variable[];
   watches: Record<string, string>; warnings: string[]; elapsedMs: number;
   monitoredBytes: number; timestamp: number;
   bindingData?: Record<string, BindingData>;

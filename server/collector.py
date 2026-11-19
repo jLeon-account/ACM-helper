@@ -88,6 +88,17 @@ def parse_pins(pins, expr, shape):
             if start<=end: ranges.append((start,min(end,start+2047)))
     return ranges
 
+def changed_at_least(old, raw, size, total, limit):
+    # Count differing elements block by block and stop early; cheap even for multi-megabyte arrays.
+    found=0; block=max(size,4096//size*size)
+    for off in range(0,total,block):
+        if raw[off:off+block]==old[off:off+block]: continue
+        for p in range(off,min(off+block,total),size):
+            if raw[p:p+size]!=old[p:p+size]:
+                found+=1
+                if found>=limit: return True
+    return False
+
 def collect_array(value, result, opts, state, line):
     t=value.type.strip_typedefs(); shape=[]
     vector=typename(t).startswith('std::vector<')
@@ -133,7 +144,10 @@ def collect_array(value, result, opts, state, line):
     old=prev['raw']; differs=old!=raw
     # Uniform bulk writes are cheap to detect without allocating a million indices.
     uniform = bool(raw) and raw == raw[:size]*length
-    bulk_init=differs and opts.get('inferInitialization',True) and length>=16 and uniform
+    # Only a genuine bulk write (memset / fill / assign touching >=16 elements in one step) counts as
+    # initialization. An array that merely *becomes* uniform after many small edits (e.g. visited[]
+    # all true, in-degrees all 0) must keep its green history.
+    bulk_init=differs and opts.get('inferInitialization',True) and length>=16 and uniform and changed_at_least(old,raw,size,total,16)
     if bulk_init:
         active.clear(); inferred=[(lo,hi)]; prev['init']=inferred; prev['chain']=[]
     elif differs:
@@ -154,15 +168,9 @@ def collect_array(value, result, opts, state, line):
                     if idx<=hi:pattern=val(idx)
                 previous=idx
             if inferred:prev['init']=merge_ranges(prev['init']+inferred)
-        if opts.get('inferInitialization',True) and len(pulses)==1:
-            idx=next(iter(pulses)); v=val(idx); chain=prev['chain']
-            if chain and chain[-1][0]+1==idx and chain[-1][1:]==(v,line): chain.append((idx,v,line))
-            else: chain=[(idx,v,line)]
-            prev['chain']=chain
-            if len(chain)>=8:
-                inferred=[(chain[0][0],idx)];prev['init']=merge_ranges(prev['init']+inferred)
-                active.difference_update(x[0] for x in chain);pulses.clear()
-        else: prev['chain']=[]
+        # 不再根据“连续多步写入同一个值”事后把已经变绿的格子改判为初始化：
+        # 这会让用户刚看到的变化在几步后消失（例如循环里通过指针把 a[i] 逐个改成 100）。
+        # 只有单步内的大批量写入（memset / fill / assign，>=16 个元素）才归为初始化。
     if opts.get('reset'):
         active.clear();pulses.clear();prev['init']=[];prev['chain']=[]
     # Cache equal-value spans; only rebuild on memory changes.
@@ -190,7 +198,8 @@ def collect_array(value, result, opts, state, line):
     # Keep off-page edits visible with a bounded change strip.
     wanted.update(sorted(pulses)[:100]);wanted.update(sorted(active)[:100])
     folded=[]; folded_intervals=[]
-    if count>200 and opts.get('fold',True):
+    # 一维数组达到 32 个元素就折叠连续 16 个以上的相同值；按网格显示的二维数组不折叠，否则行列会错位。
+    if count>=32 and opts.get('fold',True) and (len(shape)!=2 or shape[-1]>200):
         for a,b,v in prev['runs']:
             exclusions=sorted(x for x in active|forced if a<=x<=b)
             start=a
@@ -206,8 +215,75 @@ def collect_array(value, result, opts, state, line):
     result.update(cells=cells[:4096],runs=folded[:2000],monitored=[lo,hi],page=[page,min(hi,page+page_count-1)])
     if len(cells)>4096:result['warning']='显示请求超过 4096 单元格，请缩小固定区间；监测范围仍完整采集。'
     elif lo!=0 or hi!=count-1:result['warning']='仅监测指定区间；范围外未完整监测。'
-    if bulk_init or inferred:result['initialization']='疑似初始化，可关闭推断或固定查看'
+    if bulk_init or inferred or prev['init']:result['initialization']='含疑似初始化的区间（批量写入相同值，未标绿）；可关闭「初始化推断」'
     prev['raw']=raw;CACHE[key]=prev
+
+# Pointer targets: for beginners "0x7ffe..." means nothing, so describe what the pointer points at
+# (e.g. "→ a[21] = -1"). Only reads addresses and the pointee; never calls inferior functions.
+POINTER_CONTEXT = {}
+BASIC_CODES = (gdb.TYPE_CODE_BOOL, gdb.TYPE_CODE_INT, gdb.TYPE_CODE_ENUM, gdb.TYPE_CODE_FLT)
+
+def match_address(value, name, addr, depth=0):
+    t=value.type.strip_typedefs()
+    if t.code in (gdb.TYPE_CODE_REF, getattr(gdb,'TYPE_CODE_RVALUE_REF',-1)): return None
+    if typename(t).startswith('std::vector<') and 'vector<bool' not in typename(t):
+        start=value['_M_impl']['_M_start'];begin=int(start);end=int(value['_M_impl']['_M_finish'])
+        size=int(start.type.strip_typedefs().target().sizeof) or 1
+        if begin<=addr<end and (addr-begin)%size==0: return '%s[%d]'%(name,(addr-begin)//size)
+        return None
+    if value.address is None: return None
+    base=int(value.address);total=int(t.sizeof)
+    if not base<=addr<base+max(total,1): return None
+    if t.code==gdb.TYPE_CODE_ARRAY:
+        shape=[];leaf=t
+        while leaf.code==gdb.TYPE_CODE_ARRAY:
+            lo,hi=leaf.range();shape.append(hi-lo+1);leaf=leaf.target().strip_typedefs()
+        size=int(leaf.sizeof) or 1
+        if (addr-base)%size: return None
+        flat=(addr-base)//size;index=[]
+        for n in reversed(shape): index.append(flat%n);flat//=n
+        return name+''.join('[%d]'%i for i in reversed(index))
+    if t.code==gdb.TYPE_CODE_STRUCT and depth<2:
+        for field in t.fields():
+            if field.name and not field.is_base_class:
+                try: found=match_address(value[field.name],name+'.'+field.name,addr,depth+1)
+                except Exception: found=None
+                if found: return found
+        return None
+    return name if base==addr else None
+
+def pointer_target(addr):
+    ctx=POINTER_CONTEXT
+    for frame,label in ctx.get('frames',[]):
+        try: block=frame.block()
+        except Exception: continue
+        while block is not None and not block.is_global and not block.is_static:
+            for sym in block:
+                if not (sym.is_variable or sym.is_argument) or not ctx['in_project'](sym.symtab): continue
+                try: found=match_address(sym.value(frame),sym.name,addr)
+                except Exception: found=None
+                if found: return found if not label else '%s 的 %s'%(label,found)
+            block=block.superblock
+    for block in ctx.get('globals',[]):
+        for sym in block:
+            if not sym.is_variable or not ctx['in_project'](sym.symtab): continue
+            try: found=match_address(sym.value(),sym.name,addr)
+            except Exception: found=None
+            if found: return found
+    return None
+
+def pointer_text(value):
+    t=value.type.strip_typedefs();target=t.target().strip_typedefs()
+    if target.code==gdb.TYPE_CODE_INT and int(target.sizeof)==1: return str(value) # char*: keep GDB's string view
+    addr=int(value)
+    if addr==0: return 'nullptr'
+    name=pointer_target(addr)
+    pointee=None
+    if target.code in BASIC_CODES:
+        try: pointee=plain(value.dereference())
+        except Exception: pointee=None
+    if name: return '→ %s'%name+(' = %s'%pointee if pointee is not None else '')
+    return hex(addr)+(' → %s'%pointee if pointee is not None else '')
 
 def describe(value, name, expr, key, scope, opts, state, line, depth=0):
     result={'id':key,'name':name,'expression':expr,'type':str(value.type),'scope':scope,'kind':'scalar'}
@@ -228,7 +304,7 @@ def describe(value, name, expr, key, scope, opts, state, line, depth=0):
                     if field.name and not field.is_base_class:
                         result['children'].append(describe(value[field.name],field.name,expr+'.'+field.name,key+'.'+field.name,scope,opts,state,line,depth+1))
         else:
-            current=plain(value);prev=SCALARS.get(key)
+            current=pointer_text(value) if t.code==gdb.TYPE_CODE_PTR else plain(value);prev=SCALARS.get(key)
             changed=prev is not None and prev[0]!=current
             ever=changed or (prev is not None and prev[1])
             if opts.get('reset'):changed=False;ever=False
@@ -288,20 +364,41 @@ class CppIdeSnapshot(gdb.Command):
         started=time.perf_counter()
         try:
             opts=json.loads(base64.b64decode(arg).decode('utf-8'));state={'bytes':0};frames=[];INVALID_PATHS.clear()
+            root=os.path.normcase(os.path.realpath(opts['root']))
+            def in_project(symtab):
+                if symtab is None: return False
+                try: source=os.path.normcase(os.path.realpath(symtab.fullname()))
+                except Exception: return False
+                return source.startswith(root+os.sep) and os.path.basename(source)!='cppide-runtime.cpp'
+            def project_file(symtab):
+                # Path relative to the project root (forward slashes), so the UI can open the right file.
+                if not in_project(symtab): return ''
+                return os.path.relpath(os.path.realpath(symtab.fullname()),os.path.realpath(opts['root'])).replace(os.sep,'/')
             f=gdb.newest_frame();level=0
             while f is not None and level<64:
                 sal=f.find_sal();file=sal.symtab.filename if sal.symtab else '';line=sal.line
                 try:identity=str(f.read_register('rbp'))
                 except Exception:identity=str(f.read_register('sp'))
-                frames.append({'level':level,'name':f.name() or '??','file':file.replace('\\','/'),'line':line,'id':(f.name() or '?')+':'+identity})
+                frames.append({'level':level,'name':f.name() or '??','file':file.replace('\\','/'),'line':line,'id':(f.name() or '?')+':'+identity,'user':in_project(sal.symtab)})
                 f=f.older();level+=1
             selected=min(int(opts.get('frame',0)),max(0,len(frames)-1));f=gdb.newest_frame()
             for _ in range(selected):f=f.older()
-            f.select();sal=f.find_sal();location={'file':sal.symtab.filename.replace('\\','/') if sal.symtab else '', 'line':sal.line,'function':f.name() or '?'}
+            f.select();sal=f.find_sal();location={'file':sal.symtab.filename.replace('\\','/') if sal.symtab else '', 'line':sal.line,'function':f.name() or '?','user':in_project(sal.symtab),'projectFile':project_file(sal.symtab)}
+            visible_frames=[frame for frame in frames if not frame['name'].startswith('__cyg_profile_func_') and frame['name']!='cppide_final_checkpoint']
+            if opts.get('probe'):
+                # Location-only probe: decides auto step-out without consuming change history.
+                gdb.write('CPPIDE_JSON:'+base64.b64encode(json.dumps({'location':location,'frames':visible_frames},ensure_ascii=False).encode('utf-8')).decode('ascii')+'\n')
+                return
             variables=[];seen=set()
             try:block=f.block()
             except Exception:block=None
-            root=os.path.normcase(os.path.realpath(opts['root']))
+            pointer_frames=[];walker=f;steps=0
+            while walker is not None and steps<64:
+                try: user=in_project(walker.find_sal().symtab)
+                except Exception: user=False
+                if user: pointer_frames.append((walker,'' if walker==f else (walker.name() or '?')))
+                walker=walker.older();steps+=1
+            POINTER_CONTEXT.clear();POINTER_CONTEXT.update(frames=pointer_frames,in_project=in_project,globals=[b for b in ((block.static_block,block.global_block) if block is not None else ()) if b is not None])
             while block is not None:
                 scope='全局' if block.is_global or block.is_static else '局部'
                 for sym in block:
@@ -322,7 +419,6 @@ class CppIdeSnapshot(gdb.Command):
                 except Exception as error:watches[expr]='! '+str(error)
             GENERATION+=1
             bindings={binding['id']:graph_data(binding) for binding in opts.get('bindings',[])[:8]}
-            visible_frames=[frame for frame in frames if not frame['name'].startswith('__cyg_profile_func_') and frame['name']!='cppide_final_checkpoint']
             output={'variables':variables,'frames':visible_frames,'frame':selected,'location':location,'watches':watches,'warnings':[],'bindingData':bindings,'monitoredBytes':state['bytes'],'elapsedMs':round((time.perf_counter()-started)*1000,2)}
         except Exception as error:output={'error':str(error)}
         gdb.write('CPPIDE_JSON:'+base64.b64encode(json.dumps(output,ensure_ascii=False).encode('utf-8')).decode('ascii')+'\n')

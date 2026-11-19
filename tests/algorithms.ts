@@ -33,7 +33,7 @@ async function load(name:string,mutate?:(text:string)=>string){
 }
 try{
  for(const test of cases){
-  const config=await load(test.name);let snapshot=await act('continue');
+  const config=await load(test.name);let snapshot=engine.snapshot!; // 有断点时直接停在断点
   const before=variable(snapshot,test.probe);assert.equal(test.index===undefined?before.value:before.cells?.find(c=>c.index===test.index)?.value,test.before,`${test.name} before`);
   if(test.name==='quick_sort'||test.name==='union_find')assert(snapshot.frames.length>=2,'function frame missing');
   snapshot=await act('next');const changed=variable(snapshot,test.probe);const cell=test.index===undefined?changed:changed.cells!.find(c=>c.index===test.index)!;

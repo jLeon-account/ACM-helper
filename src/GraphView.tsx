@@ -3,29 +3,37 @@ import cytoscape,{type Core,type ElementDefinition} from 'cytoscape';
 import {Maximize,RotateCcw,Network,AlertTriangle} from 'lucide-react';
 import type {Binding,Snapshot} from '../shared/types';
 import {makeGraph} from '../shared/graph';
+import {graphPalettes,type GraphPalette,type ThemeName} from './theme';
 
-export default function GraphView({binding,snapshot,onPositions}:{binding:Binding;snapshot?:Snapshot;onPositions:(p:Binding['positions'])=>void}){
+function graphStyle(c:GraphPalette,directed:boolean):cytoscape.StylesheetStyle[]{
+  return [
+    {selector:'node',style:{'background-color':c.node,'border-color':c.nodeBorder,'border-width':2,'color':c.nodeText,'label':'data(display)','font-size':13,'font-family':'"JetBrains Mono", Consolas, monospace','text-valign':'center','text-wrap':'wrap','width':52,'height':52}},
+    {selector:'edge',style:{'width':1.6,'line-color':c.edge,'target-arrow-color':c.edge,'target-arrow-shape':directed?'triangle':'none','curve-style':'bezier','label':'','color':c.edgeText,'font-size':12,'text-background-color':c.labelBackground,'text-background-opacity':1,'text-background-padding':'5px','text-rotation':'none'}},
+    {selector:'node.visited',style:{'background-color':c.visited,'border-color':c.visitedBorder}},
+    {selector:'node.current',style:{'border-color':c.current,'border-width':4}},
+    {selector:'edge.current',style:{'line-color':c.current,'target-arrow-color':c.current,'width':3,'color':c.current}},
+    {selector:'edge.hovered',style:{'label':'data(label)','line-color':c.hover,'target-arrow-color':c.hover,'width':4,'color':c.hoverText,'z-index':999,'text-border-width':1,'text-border-color':c.hoverBorder,'text-border-opacity':1}},
+    {selector:'node.changed',style:{'color':c.changed}},
+    {selector:'node.pulse',style:{'border-color':c.changed,'border-width':5}},
+  ];
+}
+
+export default function GraphView({binding,snapshot,theme,onPositions}:{binding:Binding;snapshot?:Snapshot;theme:ThemeName;onPositions:(p:Binding['positions'])=>void}){
+  const themeRef=useRef(theme);themeRef.current=theme;
   const container=useRef<HTMLDivElement>(null);const cy=useRef<Core | undefined>(undefined);const topology=useRef('');const session=useRef('');
   const lastValues=useRef(new Map<string,string>());const changed=useRef(new Set<string>());const positionsCallback=useRef(onPositions);positionsCallback.current=onPositions;
   const [error,setError]=useState('');const [info,setInfo]=useState('等待调试快照');
   useEffect(()=>{
     if(!container.current)return;
-    cy.current=cytoscape({container:container.current,elements:[],style:[
-      {selector:'node',style:{'background-color':'#19272e','border-color':'#789091','border-width':2,'color':'#edf2ee','label':'data(display)','font-size':13,'font-family':'Consolas, monospace','text-valign':'center','text-wrap':'wrap','width':52,'height':52}},
-      {selector:'edge',style:{'width':1.6,'line-color':'#5f737a','target-arrow-color':'#5f737a','target-arrow-shape':binding.directed?'triangle':'none','curve-style':'bezier','label':'','color':'#b8c8cc','font-size':12,'text-background-color':'#121e25','text-background-opacity':1,'text-background-padding':'5px','text-rotation':'none'}},
-      {selector:'node.visited',style:{'background-color':'#1b3d43','border-color':'#59b8b8'}},
-      {selector:'node.current',style:{'border-color':'#e6bd70','border-width':4}},
-      {selector:'edge.current',style:{'line-color':'#e6bd70','target-arrow-color':'#e6bd70','width':3,'color':'#e6bd70'}},
-      {selector:'edge.hovered',style:{'label':'data(label)','line-color':'#b3edf1','target-arrow-color':'#b3edf1','width':4,'color':'#f0ffff','z-index':999,'text-border-width':1,'text-border-color':'#7cb7bf','text-border-opacity':1}},
-      {selector:'node.changed',style:{'color':'#91ed9e'}},
-      {selector:'node.pulse',style:{'border-color':'#91ed9e','border-width':5}}
-    ],minZoom:.25,maxZoom:3,wheelSensitivity:.18});
-    const resize=new ResizeObserver(()=>{const graph=cy.current;if(graph){graph.resize();if(graph.nodes().length)graph.fit(graph.nodes(),16);}});resize.observe(container.current);
+    cy.current=cytoscape({container:container.current,elements:[],style:graphStyle(graphPalettes[themeRef.current],binding.directed),minZoom:.25,maxZoom:3,wheelSensitivity:.18});
+    // 被隐藏（切到“普通变量”）时尺寸为 0，不做处理；重新显示时只更新尺寸，保留用户的缩放与平移。
+    let hidden=false;const resize=new ResizeObserver(()=>{const graph=cy.current;const el=container.current;if(!graph||!el)return;if(!el.offsetWidth||!el.offsetHeight){hidden=true;return;}graph.resize();if(hidden){hidden=false;return;}if(graph.nodes().length)graph.fit(graph.nodes(),16);});resize.observe(container.current);
     cy.current.on('dragfree','node',()=>{const p:Binding['positions']={};cy.current!.nodes().forEach(n=>{p[n.id()]=n.position();});positionsCallback.current(p);});
     cy.current.on('mouseover','edge',event=>{cy.current?.edges().removeClass('hovered');event.target.addClass('hovered');if(container.current)container.current.style.cursor='pointer';});
     cy.current.on('mouseout','edge',event=>{event.target.removeClass('hovered');if(container.current)container.current.style.cursor='default';});
     return()=>{resize.disconnect();cy.current?.destroy();cy.current=undefined;topology.current='';};
   },[binding.id,binding.directed]);
+  useEffect(()=>{cy.current?.style(graphStyle(graphPalettes[theme],binding.directed));},[theme,binding.directed]);
   useEffect(()=>{
     const graph=cy.current;const data=snapshot?.bindingData?.[binding.id];if(!graph||!data)return;
     try{
