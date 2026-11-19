@@ -5,8 +5,7 @@
     "stdin": "",
     "breakpoints": {
       "main.cpp": [
-        15,
-        35
+        32
       ]
     },
     "bindings": [
